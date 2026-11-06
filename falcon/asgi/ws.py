@@ -46,6 +46,8 @@ class WebSocket:
         '_close_reasons',
         '_supports_accept_headers',
         '_supports_reason',
+        '_media_epoch',
+        '_media_handlers',
         '_mh_bin_deserialize',
         '_mh_bin_serialize',
         '_mh_text_deserialize',
@@ -75,6 +77,7 @@ class WebSocket:
         ],
         max_receive_queue: int,
         default_close_reasons: dict[int, str],
+        media_epoch: int = 0,
     ):
         self._supports_accept_headers = ver != '2.0'
         self._supports_reason = _supports_reason(ver)
@@ -98,17 +101,39 @@ class WebSocket:
             self._asgi_receive = receive
         self._asgi_send = send
 
-        mh_text = media_handlers[WebSocketPayloadType.TEXT]
+        # NOTE(vytas): Snapshot the TEXT/BINARY payload mapping at the moment
+        #   the connection is constructed. This WebSocket plane is unrelated
+        #   to the HTTP media handlers; advancing the WebSocket media epoch
+        #   later only affects subsequently created connections, while this
+        #   one keeps using the handlers pinned here for its entire lifetime.
+        self._media_epoch = media_epoch
+        self._media_handlers = dict(media_handlers)
+
+        mh_text = self._media_handlers[WebSocketPayloadType.TEXT]
         self._mh_text_serialize = mh_text.serialize
         self._mh_text_deserialize = mh_text.deserialize
 
-        mh_bin = media_handlers[WebSocketPayloadType.BINARY]
+        mh_bin = self._media_handlers[WebSocketPayloadType.BINARY]
         self._mh_bin_serialize = mh_bin.serialize
         self._mh_bin_deserialize = mh_bin.deserialize
 
         self._close_reasons = default_close_reasons
         self._state = _WebSocketState.HANDSHAKE
         self._close_code = None
+
+    @property
+    def media_epoch(self) -> int:
+        """WebSocket media resolution epoch bound by this connection.
+
+        The value reflects the generation published via
+        :meth:`falcon.asgi.App.advance_ws_media_epoch` at the time this
+        connection was constructed. It is never rebound later, so an accepted
+        connection keeps using the TEXT/BINARY handlers it was born with even
+        after the host declares a newer generation.
+
+        .. versionadded:: 4.5
+        """
+        return self._media_epoch
 
     @property
     def unaccepted(self) -> bool:
@@ -600,7 +625,24 @@ class WebSocketOptions:
     """A dict-like object for configuring media handlers according to the WebSocket
     payload type (TEXT vs. BINARY) of a given message.
 
+    Unlike the HTTP media handler tables, this remains a plain mapping rather
+    than a :class:`~falcon.media.Handlers` instance. Each payload type is
+    resolved independently, i.e. replacing the TEXT handler does not replace
+    the BINARY handler (or vice versa). Handlers are bound to a connection at
+    construction time, so newly accepted connections observe mapping changes
+    while already accepted ones keep their bindings.
+
     See also: :ref:`ws_media_handlers`.
+    """
+    media_epoch: int
+    """The currently published WebSocket media resolution epoch.
+
+    Starts at ``0`` and is bumped by
+    :meth:`falcon.asgi.App.advance_ws_media_epoch`. This counter is
+    completely independent of the HTTP media epoch
+    (:attr:`falcon.App.http_media_epoch`).
+
+    .. versionadded:: 4.5
     """
     max_receive_queue: int
     """The maximum number of incoming messages to enqueue if the reception rate
@@ -619,6 +661,7 @@ class WebSocketOptions:
         'error_close_code',
         'default_close_reasons',
         'max_receive_queue',
+        'media_epoch',
         'media_handlers',
     ]
 
@@ -657,6 +700,7 @@ class WebSocketOptions:
             WebSocketPayloadType.TEXT: media.JSONHandlerWS(),
             WebSocketPayloadType.BINARY: bin_handler,
         }
+        self.media_epoch = 0
 
         # Internal Error
         #

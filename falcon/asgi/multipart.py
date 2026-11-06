@@ -101,7 +101,7 @@ class BodyPart(multipart.BodyPart):
             object: The deserialized media representation.
         """
         if self._media is _UNSET:
-            handler, _, _ = self._parse_options.media_handlers._resolve(
+            handler, _, _ = self._media_handlers._resolve(
                 self.content_type, 'text/plain'
             )
 

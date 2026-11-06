@@ -37,6 +37,7 @@ from falcon.asgi_spec import AsgiEvent
 from falcon.asgi_spec import AsgiRequestScope
 from falcon.constants import SINGLETON_HEADERS
 from falcon.forwarded import Forwarded
+from falcon.media.handlers import Handlers
 from falcon.util import deprecation
 from falcon.util import ETag
 from falcon.util.uri import parse_host
@@ -160,6 +161,14 @@ class Request(request.Request):
         self.is_websocket = scope['type'] == 'websocket'
 
         self.options = options if options is not None else request.RequestOptions()
+
+        # NOTE(vytas): Mirror the WSGI Request's HTTP media epoch pinning:
+        #   once the owning App has declared a resolution epoch, each request
+        #   keeps resolving against the handler table it was born with.
+        pinned_handlers: Handlers | None = None
+        if self.options._media_epoch:
+            pinned_handlers = self.options.media_handlers
+        self._pinned_media_handlers = pinned_handlers
 
         self.method = 'GET' if self.is_websocket else scope['method']
 
@@ -625,7 +634,11 @@ class Request(request.Request):
                 return default_when_empty
             raise self._media_error
 
-        handler, _, deserialize_sync = self.options.media_handlers._resolve(
+        media_handlers = self._pinned_media_handlers
+        if media_handlers is None:
+            media_handlers = self.options.media_handlers
+
+        handler, _, deserialize_sync = media_handlers._resolve(
             self.content_type, self.options.default_media_type
         )
 

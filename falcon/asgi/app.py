@@ -454,6 +454,43 @@ class App(falcon.app.App[_ReqT, _RespT]):
             WebSocketDisconnected, self._ws_disconnected_error_handler
         )
 
+    @property
+    def ws_media_epoch(self) -> int:
+        """Current WebSocket media resolution epoch.
+
+        The epoch starts at ``0`` and is incremented whenever the host
+        declares a new generation with
+        :meth:`~.advance_ws_media_epoch`. It is tracked independently from the
+        HTTP media epoch
+        (:attr:`falcon.App.http_media_epoch`); advancing one plane never
+        advances the other.
+
+        .. versionadded:: 4.5
+        """
+        return self.ws_options.media_epoch
+
+    def advance_ws_media_epoch(self) -> int:
+        """Declare a new WebSocket media resolution epoch.
+
+        Publish the current contents of
+        :attr:`~.WebSocketOptions.media_handlers` as the next WebSocket plane
+        generation. Connections constructed after this call bind the newly
+        published TEXT/BINARY handlers, while an already accepted connection
+        keeps using the serialize/deserialize callables it bound at
+        construction time (see :attr:`WebSocket.media_epoch`).
+
+        The two payload types stay independent: publishing a new generation
+        does not imply that TEXT and BINARY handlers were changed together,
+        and the HTTP media handler tables are never touched.
+
+        Returns:
+            int: The newly declared WebSocket media epoch.
+
+        .. versionadded:: 4.5
+        """
+        self.ws_options.media_epoch += 1
+        return self.ws_options.media_epoch
+
     @_wrap_asgi_coroutine_func
     async def __call__(  # type: ignore[override] # noqa: C901
         self,
@@ -1226,6 +1263,7 @@ class App(falcon.app.App[_ReqT, _RespT]):
             self.ws_options.media_handlers,
             self.ws_options.max_receive_queue,
             self.ws_options.default_close_reasons,
+            self.ws_options.media_epoch,
         )
 
         params: dict[str, Any] = {}

@@ -79,6 +79,7 @@ class BodyPart:
     _data: bytes | None = None
     _filename: UnsetOr[str | None] = _UNSET
     _media: UnsetOr[Any] = _UNSET
+    _media_handlers: Handlers
     _name: UnsetOr[str | None] = _UNSET
 
     stream: PyBufferedReader
@@ -113,6 +114,11 @@ class BodyPart:
         self.stream = stream
         self._headers = headers
         self._parse_options = parse_options
+        # NOTE(vytas): Pin the independent, nested media handler table at the
+        #   moment the part is parsed. This plane is deliberately not synced
+        #   with the top-level HTTP tables; neither swapping nor mutating the
+        #   latter may retroactively change the resolution of this part.
+        self._media_handlers = parse_options.media_handlers
 
     def get_data(self) -> bytes:
         """Return the body part content bytes.
@@ -278,7 +284,7 @@ class BodyPart:
             object: The deserialized media representation.
         """
         if self._media is _UNSET:
-            handler, _, _ = self._parse_options.media_handlers._resolve(
+            handler, _, _ = self._media_handlers._resolve(
                 self.content_type, 'text/plain'
             )
 
@@ -610,6 +616,13 @@ class MultipartParseOptions:
 
     By default, handlers are provided for the ``application/json`` and
     ``application/x-www-form-urlencoded`` media types.
+
+    This is an independent :class:`~falcon.media.Handlers` table with its own
+    resolution :attr:`~falcon.media.Handlers.epoch`; it is not shared with or
+    automatically synchronized to the top-level
+    :attr:`RequestOptions.media_handlers <falcon.RequestOptions.media_handlers>`
+    table (and vice versa). Advancing the app's HTTP media resolution epoch
+    therefore never rewrites this nested table.
     """
 
     if TYPE_CHECKING:

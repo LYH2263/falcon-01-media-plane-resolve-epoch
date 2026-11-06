@@ -282,6 +282,65 @@ Handlers Mapping
 .. autoclass:: falcon.media.Handlers
     :members:
 
+.. _media_resolution_epochs:
+
+Media Resolution Epochs
+-----------------------
+
+Normally, :meth:`~falcon.Request.get_media` resolves the handler for a given
+media type directly from the app's current
+:attr:`~falcon.RequestOptions.media_handlers` (and, for a response,
+:attr:`~falcon.ResponseOptions.media_handlers`) tables. The framework also
+maintains an internal resolution cache on each :class:`~falcon.media.Handlers`
+mapping; every mutation of the mapping (such as registering or removing a
+handler) flushes that cache and bumps the mapping's read-only
+:attr:`~falcon.media.Handlers.epoch`.
+
+Applications that swap or reconfigure media handlers while serving traffic
+may declare a *media resolution epoch* in order to pin a consistent handler
+set for each incoming request:
+
+.. code:: python
+
+    # Reconfigure the tables, then publish the new generation.
+    app.req_options.media_handlers[custom_type] = MyHandler()
+    app.resp_options.media_handlers[custom_type] = MyHandler()
+    epoch = app.advance_http_media_epoch()
+
+Once an epoch has been advanced, every subsequently received
+:class:`falcon.Request` (or :class:`falcon.asgi.Request`) resolves its media
+against the handler tables as published at that point, even if the app's
+options tables are mutated again later. Note the following:
+
+* The current epoch is available via
+  :attr:`~falcon.App.http_media_epoch`. Before the first
+  :meth:`~falcon.App.advance_http_media_epoch` call it is ``0`` and the
+  legacy behavior applies: each request resolves against the live tables.
+* Advancing the epoch never affects a request that is already in flight.
+  Media that was already deserialized once stays cached on that
+  :class:`~falcon.Request` instance; the body is not parsed again.
+* The request and response tables are published independently as far as
+  their entries are concerned; advancing the epoch simply publishes both
+  tables at once.
+
+The nested multipart form-handler tables are a separate plane. Each part
+returned by iterating a :class:`~falcon.media.multipart.MultipartForm`
+resolves :meth:`~falcon.media.multipart.BodyPart.get_media` against
+:attr:`falcon.media.multipart.MultipartParseOptions.media_handlers`, which is
+its own :class:`~falcon.media.Handlers` mapping (defaulting to ``text/plain``
+for parts without an explicit ``Content-Type``). The nested table carries its
+own :attr:`~falcon.media.Handlers.epoch` and resolution cache; in-place
+mutations invalidate only that cache. Each part pins the nested table object
+at the moment it is parsed, so replacing the whole
+:attr:`~falcon.media.multipart.MultipartParseOptions.media_handlers` mapping
+afterwards can never retroactively change an already parsed part. Advancing
+the HTTP media epoch neither rewrites nor synchronizes the nested table, and
+mutating the nested table never affects the top-level request or response
+tables.
+
+See also: :ref:`ws_media_handlers` for the independently versioned WebSocket
+media plane.
+
 
 .. _media_type_constants:
 

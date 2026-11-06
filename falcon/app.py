@@ -255,6 +255,7 @@ class App(Generic[_ReqT, _RespT]):
         '_sinks',
         '_static_routes',
         '_unprepared_middleware',
+        '_http_media_epoch',
         'req_options',
         'resp_options',
     )
@@ -399,10 +400,60 @@ class App(Generic[_ReqT, _RespT]):
         self.req_options.default_media_type = media_type
         self.resp_options.default_media_type = media_type
 
+        self._http_media_epoch = 0
+
         # NOTE(kgriffs): Add default error handlers
         self.add_error_handler(Exception, self._python_error_handler)
         self.add_error_handler(HTTPError, self._http_error_handler)
         self.add_error_handler(HTTPStatus, self._http_status_handler)
+
+    @property
+    def http_media_epoch(self) -> int:
+        """Current HTTP media resolution epoch.
+
+        The epoch starts at ``0`` and is incremented whenever the host
+        declares a new generation with
+        :meth:`~.advance_http_media_epoch`. It is tracked separately from the
+        WebSocket media epoch
+        (:attr:`falcon.asgi.App.ws_media_epoch`).
+
+        See also: :ref:`media`.
+
+        .. versionadded:: 4.5
+        """
+        return self._http_media_epoch
+
+    def advance_http_media_epoch(self) -> int:
+        """Declare a new HTTP media resolution epoch.
+
+        Publish the current contents of
+        :attr:`~.RequestOptions.media_handlers` and
+        :attr:`~.ResponseOptions.media_handlers` as the next HTTP plane
+        generation. Requests created after this call resolve and deserialize
+        against the published tables, while a request that has already cached
+        its media keeps returning the cached object instead of recomputing it.
+
+        The resolver caches of both tables are flushed as a publication
+        barrier, ensuring handlers changed without going through the mapping
+        mutators can not be served stale. The nested multipart handler table
+        (see :attr:`.MultipartParseOptions.media_handlers`) is intentionally
+        not touched, since it is an independent plane.
+
+        Returns:
+            int: The newly declared HTTP media epoch.
+
+        .. versionadded:: 4.5
+        """
+        self._http_media_epoch += 1
+        epoch = self._http_media_epoch
+
+        self.req_options._media_epoch = epoch
+        self.resp_options._media_epoch = epoch
+
+        self.req_options.media_handlers._clear_resolver_cache()
+        self.resp_options.media_handlers._clear_resolver_cache()
+
+        return epoch
 
     def __call__(  # noqa: C901
         self, env: WSGIEnvironment, start_response: StartResponse

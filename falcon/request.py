@@ -114,6 +114,7 @@ class Request:
         'uri_template',
         '_media',
         '_media_error',
+        '_pinned_media_handlers',
         'is_websocket',
     )
     _cookies: dict[str, list[str]] | None = None
@@ -256,6 +257,16 @@ class Request:
         self.uri_template = None
         self._media: UnsetOr[Any] = _UNSET
         self._media_error: Exception | None = None
+        # NOTE(vytas): Once the owning App has declared an HTTP media
+        #   resolution epoch (RequestOptions._media_epoch > 0), each Request
+        #   pins the handler table instance it was created with, so that
+        #   swapping the table mid-flight can not change this request's
+        #   resolution. Before any epoch has been declared, we keep reading
+        #   the table live via self.options, as in the legacy behavior.
+        pinned_handlers: Handlers | None = None
+        if options is not None and options._media_epoch:
+            pinned_handlers = options.media_handlers
+        self._pinned_media_handlers = pinned_handlers
 
         # NOTE(kgriffs): PEP 3333 specifies that PATH_INFO may be the
         # empty string, so normalize it in that case.
@@ -1135,7 +1146,11 @@ class Request:
                 return default_when_empty
             raise self._media_error
 
-        handler, _, _ = self.options.media_handlers._resolve(
+        media_handlers = self._pinned_media_handlers
+        if media_handlers is None:
+            media_handlers = self.options.media_handlers
+
+        handler, _, _ = media_handlers._resolve(
             self.content_type, self.options.default_media_type
         )
 
@@ -3038,6 +3053,7 @@ class RequestOptions:
         'strip_url_path_trailing_slash',
         'default_media_type',
         'media_handlers',
+        '_media_epoch',
     )
 
     def __init__(self) -> None:
@@ -3047,3 +3063,7 @@ class RequestOptions:
         self.strip_url_path_trailing_slash = False
         self.default_media_type = DEFAULT_MEDIA_TYPE
         self.media_handlers = Handlers()
+        # NOTE(vytas): The owning App publishes the HTTP media resolution
+        #   epoch here (see App.advance_http_media_epoch()). At 0 (the
+        #   default) requests are not pinned to a handler table snapshot.
+        self._media_epoch = 0

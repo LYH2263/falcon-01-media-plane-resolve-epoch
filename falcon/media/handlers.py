@@ -80,6 +80,9 @@ class Handlers(UserDict[str, BaseHandler]):
     data: dict[str, BaseHandler]
 
     def __init__(self, initial: Mapping[str, BaseHandler] | None = None) -> None:
+        # NOTE(vytas): The resolver/epoch are initialized first so that the
+        #   mutators invoked while populating the mapping stay functional.
+        self._epoch = 0
         self._resolve: ResolverMethod = self._create_resolver()
 
         handlers: Mapping[str, BaseHandler] = initial or {
@@ -92,19 +95,54 @@ class Handlers(UserDict[str, BaseHandler]):
         # Also, this results in self.update(...) being called.
         UserDict.__init__(self, handlers)
 
+        # NOTE(vytas): A freshly constructed table always starts out at
+        #   resolution epoch 0, regardless of how it was populated.
+        self._epoch = 0
+
+    @property
+    def epoch(self) -> int:
+        """Current resolution epoch of this handler table.
+
+        The epoch is a non-negative counter that starts at ``0`` and is
+        bumped every time the mapping is mutated (including via
+        :meth:`update`, :meth:`pop`, :meth:`popitem`, :meth:`clear`, and
+        :meth:`setdefault`). Each bump also invalidates the cached media
+        handler resolution results, so that subsequent resolutions can not
+        keep hitting a handler from before the mutation.
+
+        Note that each :class:`Handlers` instance tracks its own epoch; in
+        particular the nested multipart table does not share it with the
+        top-level HTTP tables.
+
+        .. versionadded:: 4.5
+        """
+        return self._epoch
+
     def __setitem__(self, key: str, value: BaseHandler) -> None:
         super().__setitem__(key, value)
+        self._invalidate()
 
+    def __delitem__(self, key: str) -> None:
+        super().__delitem__(key)
+        self._invalidate()
+
+    def _invalidate(self) -> None:
+        """Bump the resolution epoch and drop any cached resolve() results."""
+        self._epoch += 1
         # NOTE(kgriffs): When the mapping changes, we do not want to use a
         #   cached handler from the previous mapping, in case it was
         #   replaced.
         self._resolve.cache_clear()  # type: ignore[attr-defined]
 
-    def __delitem__(self, key: str) -> None:
-        super().__delitem__(key)
+    def _clear_resolver_cache(self) -> None:
+        """Flush cached resolve() results without mutating the table.
 
-        # NOTE(kgriffs): Similar to __setitem__(), we need to avoid resolving
-        #   to a cached handler that was removed.
+        This is used as the HTTP plane publication barrier when the host
+        declares a new media resolution epoch (see
+        :meth:`falcon.App.advance_http_media_epoch`), covering mappings that
+        were changed without going through the mutators (e.g. direct
+        manipulation of :attr:`data`).
+        """
         self._resolve.cache_clear()  # type: ignore[attr-defined]
 
     def _create_resolver(self) -> ResolverMethod:

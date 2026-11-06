@@ -1463,6 +1463,7 @@ class ResponseOptions:
         'media_handlers',
         'static_media_types',
         'xml_error_serialization',
+        '_media_epoch',
     )
 
     def __init__(self) -> None:
@@ -1470,6 +1471,10 @@ class ResponseOptions:
         self.default_media_type = DEFAULT_MEDIA_TYPE
         self.media_handlers = Handlers()
         self.xml_error_serialization = True
+        # NOTE(vytas): The owning App publishes the HTTP media resolution
+        #   epoch here, mirroring RequestOptions (see
+        #   App.advance_http_media_epoch()).
+        self._media_epoch = 0
 
         if not mimetypes.inited:
             mimetypes.init()

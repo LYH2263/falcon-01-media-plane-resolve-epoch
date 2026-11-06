@@ -272,6 +272,45 @@ specifying the WebSocket payload type:
     falcon.WebSocketPayloadType.TEXT
     falcon.WebSocketPayloadType.BINARY
 
+.. _ws_media_epoch:
+
+Binding and Media Resolution Epochs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The WebSocket media plane is separate from the HTTP one. Every new
+:class:`~falcon.asgi.WebSocket` connection snapshots
+:attr:`~falcon.asgi.WebSocketOptions.media_handlers` at construction time
+(the WebSocket handshake), and binds the ``serialize``/``deserialize``
+callables for each payload type from that snapshot. Consequently:
+
+* Mutating :attr:`~falcon.asgi.WebSocketOptions.media_handlers` (or
+  replacing the TEXT or BINARY entry) never affects a connection that has
+  already been accepted; it keeps using the handlers it was born with for
+  its entire lifetime, in both :meth:`~falcon.asgi.WebSocket.send_media` and
+  :meth:`~falcon.asgi.WebSocket.receive_media`.
+* The TEXT and BINARY entries are independent: replacing one never replaces
+  the other.
+* HTTP media handler tables (see :ref:`media_resolution_epochs`) are not
+  shared with this mapping at all.
+
+An application that exchanges WebSocket media handlers while serving
+connections may explicitly declare a new generation:
+
+.. code:: python
+
+    app.ws_options.media_handlers[falcon.WebSocketPayloadType.TEXT] = (
+        RapidJSONHandler()
+    )
+    epoch = app.advance_ws_media_epoch()
+
+Connections established afterwards bind the new mapping; the current
+generation is exposed by :attr:`~falcon.asgi.App.ws_media_epoch`, and each
+connection reports the generation it bound through
+:attr:`~falcon.asgi.WebSocket.media_epoch`. Before the first
+:meth:`~falcon.asgi.App.advance_ws_media_epoch` call the epoch is ``0``;
+plain in-place mapping edits continue to apply to subsequent connections
+just like in earlier Falcon releases.
+
 Extended Example
 ----------------
 
